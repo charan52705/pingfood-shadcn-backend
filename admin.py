@@ -127,6 +127,8 @@ class Order(BaseModel):
     order_status: str
     order_date: datetime.datetime
 
+    
+
 
     @model_validator(mode='before')
     def convert_binary_fields_to_base64(cls, values):
@@ -166,14 +168,35 @@ class User(BaseModel):
     class Config:
         arbitrary_types_allowed = True  
 
+class User(BaseModel):
+    id: int
+    firstname: str
+    lastname: str
+    email: str
+    phone: str
+    password: str
+    address_street: str
+    address_city: str
+    address_state: str
+    address_zip: int
+    user_active: bool
+    role: str
+
 
 class MenuItem(BaseModel):
-    item_id: str  
-    name: str
-    description: str
-    price: float
-    category: str
-    available: bool
+    menu_id: int
+    menu_name: str
+    menu_description: str
+    menu_type: str
+    menu_added: datetime.datetime
+    menu_active: bool
+    restaurant_id: str
+    branch_id: int
+    item_id: int
+    item_name: str
+    item_description: str
+    item_price: float
+    item_active: bool
 
     class Config:
         arbitrary_types_allowed = True  
@@ -289,45 +312,80 @@ async def get_all_users():
 
 @app.post("/create-menu-item/")
 async def create_menu_item(item: MenuItem):
+    
     item_data = item.dict()
-    result = await db.insert_one("menu", item_data)
 
-    if result.acknowledged:
-        return {"message": "Menu item created successfully", "item_id": item.item_id}
-    raise HTTPException(status_code=400, detail="Failed to create menu item")
+    
+    if isinstance(item_data.get('restaurant_id'), Binary):
+        item_data['restaurant_id'] = base64.b64encode(item_data['restaurant_id']).decode('utf-8')
+
+    if isinstance(item_data.get('branch_id'), Binary):
+        item_data['branch_id'] = base64.b64encode(item_data['branch_id']).decode('utf-8')
+
+    
+    try:
+        result = await db.insert_one("menu", item_data)
+
+        
+        if result.acknowledged:
+            return {"message": "Menu item created successfully", "item_id": item.item_id}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to create menu item")
+    
+    except Exception as e:
+        
+        print(f"Error creating menu item: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-@app.get("/menu-item/{item_id}")
-async def get_menu_item(item_id: str):
-    result = await db.find_one("menu", {"item_id": item_id})
+
+@app.get("/menu-item/{menu_id}")
+async def get_menu_item(menu_id: int):
+    
+    result = await db.find_one("menu", {"menu_id": menu_id})
     if result:
         return result
     raise HTTPException(status_code=404, detail="Menu item not found")
 
 
-@app.put("/menu-item/{item_id}")
-async def update_menu_item(item_id: str, item: MenuItem):
+
+@app.put("/menu-item/{menu_id}")
+async def update_menu_item(menu_id: int, item: MenuItem):
+    existing_item = await db.find_one("menu", {"menu_id": menu_id})
+    if not existing_item:
+        raise HTTPException(status_code=404, detail=f"Menu item with menu_id {menu_id} not found")
+    
+    
     item_dict = item.dict(exclude_unset=True)
+    
     if not item_dict:
         raise HTTPException(status_code=400, detail="No data provided to update")
-
-    result = await db.update_one("menu", {"item_id": item_id}, item_dict)
-    if result and result.get("modified_count", 0) > 0:
-        return {"message": "Menu item updated successfully"}
-    raise HTTPException(status_code=404, detail="Menu item not found")
-
-@app.delete("/menu-item/{item_id}")
-async def delete_menu_item(item_id: str):
     
-    menu_item = await db.find_one("menu", {"item_id": item_id})
+    
+    result = await db.db["menu"].replace_one({"menu_id": menu_id}, item_dict)
+
+    if result.modified_count > 0:
+        return {"message": "Menu item replaced successfully"}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to replace menu item")
+
+
+@app.delete("/menu-item/{menu_id}")
+async def delete_menu_item(menu_id: int):
+    # Find the menu item by menu_id
+    menu_item = await db.find_one("menu", {"menu_id": menu_id})
+    
     if not menu_item:
         raise HTTPException(status_code=404, detail="Menu item not found")
 
-    
-    result = await db.delete_one("menu", {"item_id": item_id})
+    # Attempt to delete the menu item from the database
+    result = await db.delete_one("menu", {"menu_id": menu_id})
+
+    # Check if the deletion was successful
     if result and result.get("deleted_count", 0) > 0:
         return {"message": "Menu item deleted successfully"}
-    
+
+    # If deletion fails, raise an exception
     raise HTTPException(status_code=400, detail="Failed to delete menu item")
 
 
@@ -387,15 +445,15 @@ async def get_all_orders():
 
 @app.post("/create-restaurants/")
 async def create_restaurants(restaurants: restaurants):
-    # If no date is provided, set it to the current timestamp
+    
     if not restaurants.res_added:
         restaurants.res_added = datetime.datetime.now()
 
-    # Convert restaurants data to dictionary and insert into database
+    
     restaurants_data = restaurants.dict()
     result = await db.insert_one("restaurants", restaurants_data)
 
-    # Return success or failure message
+    
     if result.acknowledged:
         return {"message": "restaurants created successfully", "restaurants_id": restaurants.restaurants_id}
     raise HTTPException(status_code=400, detail="Failed to create restaurants")
@@ -403,7 +461,7 @@ async def create_restaurants(restaurants: restaurants):
 
 @app.get("/restaurants/{restaurants_id}")
 async def get_restaurants(restaurants_id: int):
-    # Find a restaurants by its ID
+    
     result = await db.find_one("restaurants", {"restaurants_id": restaurants_id})
     if result:
         return result
@@ -412,12 +470,12 @@ async def get_restaurants(restaurants_id: int):
 
 @app.put("/restaurants/{restaurants_id}")
 async def update_restaurants(restaurants_id: int, restaurants: restaurants):
-    # Update only the fields provided in the request body
+    
     restaurants_dict = restaurants.dict(exclude_unset=True)
     if not restaurants_dict:
         raise HTTPException(status_code=400, detail="No data provided to update")
 
-    # Perform the update in the database
+    
     result = await db.update_one("restaurants", {"restaurants_id": restaurants_id}, restaurants_dict)
     if result and result.get("modified_count", 0) > 0:
         return {"message": "restaurants updated successfully"}
@@ -426,12 +484,12 @@ async def update_restaurants(restaurants_id: int, restaurants: restaurants):
 
 @app.delete("/restaurants/{restaurants_id}")
 async def delete_restaurants(restaurants_id: int):
-    # Check if the restaurants exists before deleting
+    
     restaurants = await db.find_one("restaurants", {"restaurants_id": restaurants_id})
     if not restaurants:
         raise HTTPException(status_code=400, detail="restaurants not found")
 
-    # Perform the delete operation
+    
     result = await db.delete_one("restaurants", {"restaurants_id": restaurants_id})
     if result and result.get("deleted_count", 0) > 0:
         return {"message": "restaurants deleted successfully"}
@@ -440,6 +498,72 @@ async def delete_restaurants(restaurants_id: int):
 
 @app.get("/restaurants/")
 async def get_all_restaurantss():
-    # Fetch all restaurantss from the database, with a limit of 200
+    
     restaurantss = await db.db["restaurants"].find().to_list(length=200)
     return convert_objectid_to_str(restaurantss)
+
+
+@app.post("/create-user/")
+async def create_user(user: User):
+    user_data = user.dict()
+
+    # Attempt to insert the user data into the database
+    try:
+        result = await db.insert_one("users", user_data)
+
+        if result.get("acknowledged"):
+            return {"message": "User created successfully", "user_id": user.id}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to create user")
+
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@app.get("/user/{user_id}")
+async def get_user(user_id: int):
+    # Retrieve user details by user_id
+    result = await db.find_one("userData", {"id": user_id})
+    if result:
+        return result
+    raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
+
+@app.put("/user/{user_id}")
+async def update_user(user_id: int, user: User):
+    # Find the user by id
+    existing_user = await db.find_one("userData", {"id": user_id})
+    if not existing_user:
+        raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
+
+    user_dict = user.dict(exclude_unset=True)
+
+    if not user_dict:
+        raise HTTPException(status_code=400, detail="No data provided to update")
+
+    # Attempt to update the user record
+    result = await db.replace_one("userData", {"id": user_id}, user_dict)
+
+    if result.get("modified_count", 0) > 0:
+        return {"message": "User updated successfully"}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to update user")
+
+@app.delete("/user/{user_id}")
+async def delete_user(user_id: int):
+    # Find the user by id
+    user = await db.find_one("userData", {"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
+
+    # Attempt to delete the user record
+    result = await db.delete_one("userData", {"id": user_id})
+
+    if result.get("deleted_count", 0) > 0:
+        return {"message": "User deleted successfully"}
+    else:
+        raise HTTPException(status_code=400, detail="Failed to delete user")
+
+@app.get("/users/")
+async def get_all_users():
+    users = await db.find_all("userData")
+    return users
